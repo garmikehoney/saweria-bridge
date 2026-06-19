@@ -1,7 +1,7 @@
 // api/session.js
 //
 // Dipanggil oleh Roblox (SaweriaBridge.lua) sekali saat server Roblox start.
-// Mengembalikan token session yang dipakai untuk request selanjutnya.
+// Sekarang juga butuh "channel" supaya tahu data donasi siapa yang harus dibaca.
 
 import { redis } from "../lib/redis.js";
 import { randomBytes } from "crypto";
@@ -13,17 +13,24 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { universeId } = req.body || {};
+    const { universeId, channel } = req.body || {};
     if (!universeId) {
       res.status(400).json({ ok: false, reason: "missing_universe_id" });
       return;
     }
+    if (!channel) {
+      res.status(400).json({ ok: false, reason: "missing_channel" });
+      return;
+    }
 
-    // Generate token random
     const token = randomBytes(16).toString("hex");
 
-    // Simpan token -> universeId selama 24 jam
-    await redis.set(`saweria:session:${token}`, String(universeId), { ex: 86400 });
+    // Simpan token -> { universeId, channel } selama 24 jam
+    await redis.set(
+      `saweria:session:${token}`,
+      JSON.stringify({ universeId: String(universeId), channel: String(channel) }),
+      { ex: 86400 }
+    );
 
     res.status(200).json({ ok: true, token });
   } catch (err) {
