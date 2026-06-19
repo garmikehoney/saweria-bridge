@@ -1,12 +1,60 @@
 // api/webhook/saweria.js
 //
 // Endpoint ini didaftarkan ke Saweria sebagai Webhook URL.
-// Saweria akan kirim POST request kesini setiap ada donasi masuk.
+// PENTING: Saweria mengirim data dalam FORMAT DISCORD EMBED, contoh:
+//   {
+//     "embeds": [{
+//       "title": "... DONASI MASUK 69.420 DARI Someguy ...",
+//       "description": "Pesan donasi disini",
+//       "color": 16428587
+//     }]
+//   }
 //
 // URL yang didaftarkan ke Saweria nanti formatnya:
 //   https://nama-project-kamu.vercel.app/api/webhook/saweria?secret=KODE_RAHASIA_KAMU
 
 import { redis } from "../../lib/redis.js";
+
+function parseSaweriaPayload(body) {
+  // ── FORMAT 1: Discord Embed (format asli Saweria) ──────
+  if (body.embeds && Array.isArray(body.embeds) && body.embeds[0]) {
+    const embed = body.embeds[0];
+    const title = String(embed.title || "");
+    const description = String(embed.description || "");
+
+    // Ambil angka setelah kata "MASUK" (format: "69.420" pakai titik)
+    const amountMatch = title.match(/MASUK\s+([\d.,]+)/i);
+    let amount = 0;
+    if (amountMatch) {
+      // hapus titik/koma pemisah ribuan, lalu jadikan angka
+      amount = Number(amountMatch[1].replace(/[.,]/g, ""));
+    }
+
+    // Ambil nama donatur: kata pertama setelah "DARI"
+    const afterDari = title.split(/DARI\s+/i)[1] || "";
+    const nameMatch = afterDari.match(/^([^\s]+(?:\s[^\s]+)?)/);
+    const donorName = nameMatch ? nameMatch[1] : "Anonymous";
+
+    return {
+      donorName,
+      amount,
+      message: description,
+    };
+  }
+
+  // ── FORMAT 2: JSON polos (jaga-jaga kalau ada format lain) ──
+  const donorName =
+    body.donator_name || body.donatorName || body.donator || body.name || "Anonymous";
+  const amountRaw =
+    body.amount_raw ?? body.amount ?? body.amountRaw ?? body.nominal ?? body.total ?? 0;
+  const message = body.message || body.note || body.pesan || "";
+
+  return {
+    donorName: String(donorName),
+    amount: Number(amountRaw),
+    message: String(message),
+  };
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -14,7 +62,6 @@ export default async function handler(req, res) {
     return;
   }
 
-  // ── VALIDASI SECRET ─────────────────────────────────
   const secret = req.query.secret;
   if (!secret || secret !== process.env.WEBHOOK_SECRET) {
     res.status(401).json({ ok: false, reason: "invalid_secret" });
@@ -23,38 +70,14 @@ export default async function handler(req, res) {
 
   try {
     const body = req.body || {};
-
-    // DEBUG: selalu print body mentah yang diterima dari Saweria
-    // Lihat ini di Vercel Logs untuk tahu format field aslinya
     console.log("[webhook/saweria] RAW BODY:", JSON.stringify(body));
 
-    // ── FORMAT PAYLOAD — coba semua kemungkinan nama field ─
-    const donorName =
-      body.donator_name ||
-      body.donatorName ||
-      body.donator ||
-      body.name ||
-      "Anonymous";
+    const parsed = parseSaweriaPayload(body);
+    console.log("[webhook/saweria] PARSED:", JSON.stringify(parsed));
 
-    const amountRaw =
-      body.amount_raw ??
-      body.amount ??
-      body.amountRaw ??
-      body.nominal ??
-      body.total ??
-      0;
-
-    const amount = Number(amountRaw);
-
-    const message =
-      body.message ||
-      body.note ||
-      body.pesan ||
-      "";
-
-    if (!amount || amount <= 0) {
-      console.log("[webhook/saweria] REJECTED - invalid amount. Body was:", JSON.stringify(body));
-      res.status(400).json({ ok: false, reason: "invalid_amount", receivedBody: body });
+    if (!parsed.amount || parsed.amount <= 0) {
+      console.log("[webhook/saweria] REJECTED - invalid amount after parsing.");
+      res.status(400).json({ ok: false, reason: "invalid_amount", parsed });
       return;
     }
 
@@ -63,10 +86,10 @@ export default async function handler(req, res) {
     const donation = {
       id: String(id),
       source: "saweria",
-      donorName: String(donorName),
-      amount: amount,
+      donorName: parsed.donorName,
+      amount: parsed.amount,
       currency: "IDR",
-      message: String(message),
+      message: parsed.message,
       timestamp: Date.now(),
     };
 
