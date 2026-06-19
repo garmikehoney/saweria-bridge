@@ -12,6 +12,18 @@ async function validateSession(req) {
   return !!universeId;
 }
 
+// Upstash Redis client kadang otomatis decode JSON, kadang tidak.
+// Helper ini menangani keduanya dengan aman.
+function safeParse(entry) {
+  if (entry == null) return null;
+  if (typeof entry === "object") return entry; // sudah ter-decode otomatis
+  try {
+    return JSON.parse(entry);
+  } catch {
+    return null;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "GET") {
     res.status(405).json({ ok: false, reason: "method_not_allowed" });
@@ -28,19 +40,11 @@ export default async function handler(req, res) {
     const afterStr = req.query.after || "0";
     const afterNum = Number(afterStr);
 
-    // Ambil semua donasi dengan score (id) lebih besar dari "after"
-    // zrangebyscore(key, min, max) -> exclusive min pakai "(" prefix
     const raw = await redis.zrange("saweria:donations", `(${afterNum}`, "+inf", {
       byScore: true,
     });
 
-    const items = (raw || []).map((entry) => {
-      try {
-        return JSON.parse(entry);
-      } catch {
-        return null;
-      }
-    }).filter(Boolean);
+    const items = (raw || []).map(safeParse).filter(Boolean);
 
     res.status(200).json({ ok: true, items });
   } catch (err) {
