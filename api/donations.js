@@ -1,27 +1,26 @@
 // api/donations.js
 //
 // Endpoint UTAMA yang di-polling Roblox tiap 4-7 detik.
-// Mengembalikan semua donasi baru yang ID-nya lebih besar dari "after".
+// Sekarang per-channel sesuai session, jadi data antar game/teman tidak campur.
 
 import { redis } from "../lib/redis.js";
 
-async function validateSession(req) {
-  const token = req.headers["x-session"];
-  if (!token) return false;
-  const universeId = await redis.get(`saweria:session:${token}`);
-  return !!universeId;
-}
-
-// Upstash Redis client kadang otomatis decode JSON, kadang tidak.
-// Helper ini menangani keduanya dengan aman.
 function safeParse(entry) {
   if (entry == null) return null;
-  if (typeof entry === "object") return entry; // sudah ter-decode otomatis
+  if (typeof entry === "object") return entry;
   try {
     return JSON.parse(entry);
   } catch {
     return null;
   }
+}
+
+async function getSessionData(req) {
+  const token = req.headers["x-session"];
+  if (!token) return null;
+  const raw = await redis.get(`saweria:session:${token}`);
+  if (!raw) return null;
+  return safeParse(raw);
 }
 
 export default async function handler(req, res) {
@@ -30,8 +29,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  const valid = await validateSession(req);
-  if (!valid) {
+  const session = await getSessionData(req);
+  if (!session || !session.channel) {
     res.status(401).json({ ok: false, reason: "invalid_session" });
     return;
   }
@@ -40,7 +39,7 @@ export default async function handler(req, res) {
     const afterStr = req.query.after || "0";
     const afterNum = Number(afterStr);
 
-    const raw = await redis.zrange("saweria:donations", `(${afterNum}`, "+inf", {
+    const raw = await redis.zrange(`saweria:donations:${session.channel}`, `(${afterNum}`, "+inf", {
       byScore: true,
     });
 
