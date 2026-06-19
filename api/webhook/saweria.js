@@ -30,9 +30,10 @@ function parseSaweriaPayload(body) {
       amount = Number(amountMatch[1].replace(/[.,]/g, ""));
     }
 
-    // Ambil nama donatur: kata pertama setelah "DARI"
+    // Ambil nama donatur: HANYA kata pertama setelah "DARI"
+    // (nama Saweria umumnya 1 kata tanpa spasi)
     const afterDari = title.split(/DARI\s+/i)[1] || "";
-    const nameMatch = afterDari.match(/^([^\s]+(?:\s[^\s]+)?)/);
+    const nameMatch = afterDari.match(/^([^\s]+)/);
     const donorName = nameMatch ? nameMatch[1] : "Anonymous";
 
     return {
