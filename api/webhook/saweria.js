@@ -15,7 +15,6 @@ export default async function handler(req, res) {
   }
 
   // ── VALIDASI SECRET ─────────────────────────────────
-  // Mencegah orang lain kirim donasi palsu ke endpoint kamu
   const secret = req.query.secret;
   if (!secret || secret !== process.env.WEBHOOK_SECRET) {
     res.status(401).json({ ok: false, reason: "invalid_secret" });
@@ -25,23 +24,40 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
 
-    // ── FORMAT PAYLOAD DARI SAWERIA ───────────────────
-    // Saweria mengirim field-field berikut (sesuai dokumentasi resmi):
-    //   donator_name   -> nama pendonasi
-    //   amount_raw     -> jumlah donasi (angka)
-    //   message        -> pesan donasi
-    //   created_at     -> waktu donasi
-    const donorName = body.donator_name || body.donatorName || "Anonymous";
-    const amount    = Number(body.amount_raw || body.amount || 0);
-    const message   = body.message || "";
+    // DEBUG: selalu print body mentah yang diterima dari Saweria
+    // Lihat ini di Vercel Logs untuk tahu format field aslinya
+    console.log("[webhook/saweria] RAW BODY:", JSON.stringify(body));
+
+    // ── FORMAT PAYLOAD — coba semua kemungkinan nama field ─
+    const donorName =
+      body.donator_name ||
+      body.donatorName ||
+      body.donator ||
+      body.name ||
+      "Anonymous";
+
+    const amountRaw =
+      body.amount_raw ??
+      body.amount ??
+      body.amountRaw ??
+      body.nominal ??
+      body.total ??
+      0;
+
+    const amount = Number(amountRaw);
+
+    const message =
+      body.message ||
+      body.note ||
+      body.pesan ||
+      "";
 
     if (!amount || amount <= 0) {
-      res.status(400).json({ ok: false, reason: "invalid_amount" });
+      console.log("[webhook/saweria] REJECTED - invalid amount. Body was:", JSON.stringify(body));
+      res.status(400).json({ ok: false, reason: "invalid_amount", receivedBody: body });
       return;
     }
 
-    // ── GENERATE ID UNIK & INCREMENTAL ────────────────
-    // Roblox butuh ID yang selalu naik supaya bisa tahu mana donasi baru
     const id = await redis.incr("saweria:donation_counter");
 
     const donation = {
@@ -54,14 +70,14 @@ export default async function handler(req, res) {
       timestamp: Date.now(),
     };
 
-    // ── SIMPAN KE REDIS (sorted set, score = id) ──────
     await redis.zadd("saweria:donations", {
       score: id,
       member: JSON.stringify(donation),
     });
 
-    // Hapus data lebih dari 500 entry terakhir biar Redis tidak penuh
     await redis.zremrangebyrank("saweria:donations", 0, -501);
+
+    console.log("[webhook/saweria] SAVED:", JSON.stringify(donation));
 
     res.status(200).json({ ok: true, id: donation.id });
   } catch (err) {
