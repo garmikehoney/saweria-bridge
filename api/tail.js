@@ -2,26 +2,26 @@
 //
 // Dipanggil sekali saat server Roblox start, untuk tahu
 // "donasi terakhir sampai sini" supaya donasi LAMA tidak ter-replay.
+// Sekarang per-channel sesuai session.
 
 import { redis } from "../lib/redis.js";
 
-async function validateSession(req) {
-  const token = req.headers["x-session"];
-  if (!token) return false;
-  const universeId = await redis.get(`saweria:session:${token}`);
-  return !!universeId;
-}
-
-// Upstash Redis client kadang otomatis decode JSON, kadang tidak.
-// Helper ini menangani keduanya dengan aman.
 function safeParse(entry) {
   if (entry == null) return null;
-  if (typeof entry === "object") return entry; // sudah ter-decode otomatis
+  if (typeof entry === "object") return entry;
   try {
     return JSON.parse(entry);
   } catch {
     return null;
   }
+}
+
+async function getSessionData(req) {
+  const token = req.headers["x-session"];
+  if (!token) return null;
+  const raw = await redis.get(`saweria:session:${token}`);
+  if (!raw) return null;
+  return safeParse(raw);
 }
 
 export default async function handler(req, res) {
@@ -30,14 +30,14 @@ export default async function handler(req, res) {
     return;
   }
 
-  const valid = await validateSession(req);
-  if (!valid) {
+  const session = await getSessionData(req);
+  if (!session || !session.channel) {
     res.status(401).json({ ok: false, reason: "invalid_session" });
     return;
   }
 
   try {
-    const latest = await redis.zrange("saweria:donations", -1, -1);
+    const latest = await redis.zrange(`saweria:donations:${session.channel}`, -1, -1);
     if (!latest || latest.length === 0) {
       res.status(200).json({ ok: true, id: "0" });
       return;
