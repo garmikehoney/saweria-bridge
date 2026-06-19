@@ -1,49 +1,34 @@
 // api/webhook/saweria.js
 //
 // Endpoint ini didaftarkan ke Saweria sebagai Webhook URL.
-// PENTING: Saweria mengirim data dalam FORMAT DISCORD EMBED, contoh:
-//   {
-//     "embeds": [{
-//       "title": "... DONASI MASUK 69.420 DARI Someguy ...",
-//       "description": "Pesan donasi disini",
-//       "color": 16428587
-//     }]
-//   }
+// Sekarang support MULTI-CHANNEL — beberapa game/teman bisa pakai
+// 1 bridge yang sama, datanya tetap terpisah.
 //
-// URL yang didaftarkan ke Saweria nanti formatnya:
-//   https://nama-project-kamu.vercel.app/api/webhook/saweria?secret=KODE_RAHASIA_KAMU
+// URL untuk tiap game/teman (WAJIB beda "channel"):
+//   https://nama-project.vercel.app/api/webhook/saweria?secret=KODE_RAHASIA&channel=npnh
+//   https://nama-project.vercel.app/api/webhook/saweria?secret=KODE_RAHASIA&channel=temanA
 
 import { redis } from "../../lib/redis.js";
 
 function parseSaweriaPayload(body) {
-  // ── FORMAT 1: Discord Embed (format asli Saweria) ──────
   if (body.embeds && Array.isArray(body.embeds) && body.embeds[0]) {
     const embed = body.embeds[0];
     const title = String(embed.title || "");
     const description = String(embed.description || "");
 
-    // Ambil angka setelah kata "MASUK" (format: "69.420" pakai titik)
     const amountMatch = title.match(/MASUK\s+([\d.,]+)/i);
     let amount = 0;
     if (amountMatch) {
-      // hapus titik/koma pemisah ribuan, lalu jadikan angka
       amount = Number(amountMatch[1].replace(/[.,]/g, ""));
     }
 
-    // Ambil nama donatur: HANYA kata pertama setelah "DARI"
-    // (nama Saweria umumnya 1 kata tanpa spasi)
     const afterDari = title.split(/DARI\s+/i)[1] || "";
     const nameMatch = afterDari.match(/^([^\s]+)/);
     const donorName = nameMatch ? nameMatch[1] : "Anonymous";
 
-    return {
-      donorName,
-      amount,
-      message: description,
-    };
+    return { donorName, amount, message: description };
   }
 
-  // ── FORMAT 2: JSON polos (jaga-jaga kalau ada format lain) ──
   const donorName =
     body.donator_name || body.donatorName || body.donator || body.name || "Anonymous";
   const amountRaw =
@@ -69,20 +54,27 @@ export default async function handler(req, res) {
     return;
   }
 
+  // ── CHANNEL — wajib diisi, identitas unik tiap game/teman ──
+  const channel = String(req.query.channel || "").trim();
+  if (!channel) {
+    res.status(400).json({ ok: false, reason: "missing_channel" });
+    return;
+  }
+
   try {
     const body = req.body || {};
-    console.log("[webhook/saweria] RAW BODY:", JSON.stringify(body));
+    console.log(`[webhook/saweria] [channel=${channel}] RAW BODY:`, JSON.stringify(body));
 
     const parsed = parseSaweriaPayload(body);
-    console.log("[webhook/saweria] PARSED:", JSON.stringify(parsed));
+    console.log(`[webhook/saweria] [channel=${channel}] PARSED:`, JSON.stringify(parsed));
 
     if (!parsed.amount || parsed.amount <= 0) {
-      console.log("[webhook/saweria] REJECTED - invalid amount after parsing.");
       res.status(400).json({ ok: false, reason: "invalid_amount", parsed });
       return;
     }
 
-    const id = await redis.incr("saweria:donation_counter");
+    // Counter & list donasi sekarang per-channel
+    const id = await redis.incr(`saweria:donation_counter:${channel}`);
 
     const donation = {
       id: String(id),
@@ -94,14 +86,14 @@ export default async function handler(req, res) {
       timestamp: Date.now(),
     };
 
-    await redis.zadd("saweria:donations", {
+    await redis.zadd(`saweria:donations:${channel}`, {
       score: id,
       member: JSON.stringify(donation),
     });
 
-    await redis.zremrangebyrank("saweria:donations", 0, -501);
+    await redis.zremrangebyrank(`saweria:donations:${channel}`, 0, -501);
 
-    console.log("[webhook/saweria] SAVED:", JSON.stringify(donation));
+    console.log(`[webhook/saweria] [channel=${channel}] SAVED:`, JSON.stringify(donation));
 
     res.status(200).json({ ok: true, id: donation.id });
   } catch (err) {
