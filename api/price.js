@@ -1,6 +1,6 @@
 // /api/price.js
 // GET /api/price?id=215718515
-// Butuh env variable ROBLOX_COOKIE di Vercel buat dapat Best Price reseller
+// Return recentAveragePrice dari Roblox economy API (berubah otomatis tiap ada transaksi)
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,34 +12,9 @@ export default async function handler(req, res) {
   }
 
   const assetId = Number(id);
-  const cookie = process.env.ROBLOX_COOKIE;
 
   try {
-    // 1. Resellers endpoint (butuh cookie buat dapat data aktif)
-    if (cookie) {
-      const resellerRes = await fetch(
-        `https://economy.roblox.com/v1/assets/${assetId}/resellers?limit=1&sortOrder=Asc`,
-        {
-          headers: {
-            "Accept": "application/json",
-            "Cookie": `.ROBLOSECURITY=${cookie}`,
-          },
-        }
-      );
-
-      if (resellerRes.ok) {
-        const data = await resellerRes.json();
-        if (data?.data?.length > 0 && data.data[0].price) {
-          return res.status(200).json({
-            assetId,
-            price: data.data[0].price,
-            source: "reseller-best-price",
-          });
-        }
-      }
-    }
-
-    // 2. Resale data — recentAveragePrice (gak butuh auth, tapi ini rata-rata bukan best price)
+    // primary: recentAveragePrice (rata-rata harga transaksi terakhir, otomatis update)
     const resaleRes = await fetch(
       `https://economy.roblox.com/v1/assets/${assetId}/resale-data`,
       { headers: { "Accept": "application/json" } }
@@ -63,7 +38,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. Last resort
+    // fallback: harga original dari product info
     const detailRes = await fetch(
       `https://economy.roblox.com/v2/assets/${assetId}/details`,
       { headers: { "Accept": "application/json" } }
