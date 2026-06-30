@@ -1,10 +1,10 @@
-// /api/price.js — taruh di folder api/ di project Vercel saweria-bridge kamu
+// /api/price.js
 // GET /api/price?id=215718515
-// Gak nyentuh Redis/Upstash atau data Saweria sama sekali
+// Butuh env variable ROBLOX_COOKIE di Vercel buat dapat Best Price reseller
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "s-maxage=120"); // cache di Vercel edge 2 menit
+  res.setHeader("Cache-Control", "s-maxage=120");
 
   const { id } = req.query;
   if (!id || isNaN(Number(id))) {
@@ -12,26 +12,34 @@ export default async function handler(req, res) {
   }
 
   const assetId = Number(id);
+  const cookie = process.env.ROBLOX_COOKIE;
 
   try {
-    // 1. Coba ambil harga reseller terendah (= "Best Price" di marketplace)
-    const resellerRes = await fetch(
-      `https://economy.roblox.com/v1/assets/${assetId}/resellers?limit=1&sortOrder=Asc`,
-      { headers: { "Accept": "application/json" } }
-    );
+    // 1. Resellers endpoint (butuh cookie buat dapat data aktif)
+    if (cookie) {
+      const resellerRes = await fetch(
+        `https://economy.roblox.com/v1/assets/${assetId}/resellers?limit=1&sortOrder=Asc`,
+        {
+          headers: {
+            "Accept": "application/json",
+            "Cookie": `.ROBLOSECURITY=${cookie}`,
+          },
+        }
+      );
 
-    if (resellerRes.ok) {
-      const data = await resellerRes.json();
-      if (data?.data?.length > 0 && data.data[0].price) {
-        return res.status(200).json({
-          assetId,
-          price: data.data[0].price,
-          source: "reseller",
-        });
+      if (resellerRes.ok) {
+        const data = await resellerRes.json();
+        if (data?.data?.length > 0 && data.data[0].price) {
+          return res.status(200).json({
+            assetId,
+            price: data.data[0].price,
+            source: "reseller-best-price",
+          });
+        }
       }
     }
 
-    // 2. Kalau gak ada reseller aktif, coba pakai recentAveragePrice dari resale-data
+    // 2. Resale data — recentAveragePrice (gak butuh auth, tapi ini rata-rata bukan best price)
     const resaleRes = await fetch(
       `https://economy.roblox.com/v1/assets/${assetId}/resale-data`,
       { headers: { "Accept": "application/json" } }
@@ -46,7 +54,6 @@ export default async function handler(req, res) {
           source: "resale-average",
         });
       }
-      // item non-limited → punya originalPrice
       if (data?.originalPrice) {
         return res.status(200).json({
           assetId,
@@ -56,7 +63,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. Last resort: detail asset langsung
+    // 3. Last resort
     const detailRes = await fetch(
       `https://economy.roblox.com/v2/assets/${assetId}/details`,
       { headers: { "Accept": "application/json" } }
